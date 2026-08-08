@@ -1,4 +1,4 @@
-# 📑 CS-300 Project Report: Image Inpainting using Conditional Generative Adversarial Networks (cGANs)
+# CS-300 Project Report: Image Inpainting using Conditional Generative Adversarial Networks (cGANs)
 
 **Course**: CS-300  
 **Project Topic**: Image Inpainting using Conditional GANs (pix2pix)  
