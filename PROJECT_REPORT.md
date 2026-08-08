@@ -1,143 +1,110 @@
 # CS-300 Project Report: Image Inpainting using Conditional Generative Adversarial Networks (cGANs)
 
-**Course**: CS-300  
-**Project Topic**: Image Inpainting using Conditional GANs (pix2pix)  
-**Author**: Ayush Mishra  
+**Title**: Image Inpainting Using Generative Adversarial Networks  
+**Author**: Ayush Dutt Mishra (Roll No: 2301058)  
+**Advisor**: Dr. Kaustuv Nag, Assistant Professor  
+**Department**: Department of Computer Science and Engineering, Indian Institute of Information Technology Guwahati (IIIT Guwahati)  
+**Degree / Context**: B.Tech Semester VI Project Report, April 2026  
 **Framework**: PyTorch  
 **Dataset**: CelebA Facial Dataset (20,000 images, 256×256 resolution)  
+**Official PDF Report**: [`Ayush_2301058_report (2).pdf`](Ayush_2301058_report%20%282%29.pdf)  
 
 ---
 
 ## Abstract
 
-Image Inpainting is a fundamental computer vision task that aims to reconstruct missing, corrupted, or occluded regions in images while maintaining semantic consistency and visually plausible textures. In this project, we implement and evaluate a Conditional Generative Adversarial Network (cGAN) based on the pix2pix architecture. To overcome common GAN instability issues and boundary artifacts, we introduce **Spectral Normalization (`spectral_norm`)** in the PatchGAN Discriminator, a **VGG-16 Perceptual Loss** alongside L1 pixel reconstruction loss, and a **Soft-Composite Cosine Alpha Feathering** post-processing stage. The final model was trained for **116 epochs**, achieving a peak Peak Signal-to-Noise Ratio (**PSNR**) of **29.01 dB** and Structural Similarity Index (**SSIM**) of **0.998**.
+Image Inpainting is a fundamental computer vision task that aims to reconstruct missing, corrupted, or occluded regions in images while maintaining semantic consistency and visually plausible textures. In this work, I study GAN-based inpainting and implement a Pix2Pix-inspired conditional adversarial framework for face completion on the CelebA dataset. To overcome common GAN instability issues and boundary artifacts, I introduce **Spectral Normalization (`spectral_norm`)** in the PatchGAN Discriminator, a **VGG-16 Perceptual Loss** alongside L1 pixel reconstruction loss, and a **Soft-Composite Cosine Alpha Feathering** post-processing stage. The final model was trained across 4 progressive phases up to **116 epochs**, achieving a peak Peak Signal-to-Noise Ratio (**PSNR**) of **29.01 dB** and Structural Similarity Index (**SSIM**) of **0.998**.
 
 ---
 
 ## 1. Introduction & Problem Statement
 
-Given an incomplete image \(I_{\text{masked}} = I \odot (1 - M)\) corrupted by a binary mask \(M\), the goal of image inpainting is to generate a reconstructed image \(\hat{I}\) such that:
-1. The unmasked region \(\hat{I} \odot (1 - M)\) matches the ground-truth target image \(I\) exactly.
-2. The filled region \(\hat{I} \odot M\) is semantically consistent, structurally smooth, and visually indistinguishable from natural image context.
+Given an incomplete face image $I \in \mathbb{R}^{H \times W \times 3}$ and a binary mask $M \in \{0, 1\}^{H \times W}$ indicating missing pixel locations ($M_{ij} = 1$ for missing), the goal of image inpainting is to produce a completed image $\hat{I}$ such that:
+1. The unmasked region $\hat{I}_{ij} = I_{ij}$ for all valid pixels ($M_{ij} = 0$).
+2. The filled region $\hat{I}_{ij}$ is perceptually realistic, structurally smooth, and semantically consistent for all missing pixels ($M_{ij} = 1$).
 
-Traditional algorithmic approaches (such as Telea or Navier-Stokes PDE-based fluid dynamics) rely solely on local patch statistics and fail to synthesize complex semantic features like facial structure, eyes, nose, or lips. Generative Adversarial Networks, specifically Conditional GANs, learn a deep prior over image distributions to generate missing semantic features.
-
----
-
-## 2. Literature Review & Theoretical Foundation
-
-Our implementation builds upon three foundational computer vision & deep learning papers:
-
-1. **Generative Adversarial Networks (Goodfellow et al., 2014)**:
-   Introduced the minimax game between a Generator \(G\) and a Discriminator \(D\).
-   \[
-   \min_G \max_D V(D, G) = \mathbb{E}_{y \sim p_{\text{data}}(y)}[\log D(y)] + \mathbb{E}_{z \sim p_z(z)}[\log (1 - D(G(z)))]
-   \]
-
-2. **Conditional GANs (Mirza & Osindero, 2014)**:
-   Extends GANs by conditioning both Generator and Discriminator on observed auxiliary information \(x\) (the masked input image):
-   \[
-   \min_G \max_D V(D, G) = \mathbb{E}_{x, y}[\log D(x, y)] + \mathbb{E}_{x, z}[\log (1 - D(x, G(x, z)))]
-   \]
-
-3. **pix2pix Architecture (Isola et al., 2016)**:
-   Demonstrated that combining conditional adversarial loss with an \(L_1\) pixel-distance loss produces sharp, realistic image-to-image translations without blurring:
-   \[
-   \mathcal{L}_{L1}(G) = \mathbb{E}_{x, y, z}[\| y - G(x, z) \|_1]
-   \]
+The corrupted observation available to the model is $I_m = I \odot (1 - M) + c \odot M$, where $\odot$ denotes element-wise multiplication and $c$ is a constant fill value. Traditional algorithmic approaches (such as diffusion or exemplar patch synthesis) fail when the missing area is large and demands high-level semantic understanding of facial structure (eyes, nose, lips).
 
 ---
 
-## 3. Method & Network Architecture
+## 2. System Architecture & Model Components
 
-### 3.1 UNet Generator
+![cGAN Inpainting System Architecture](assets/cgan_inpainting_architecture.jpg)  
+*Figure 1: Complete System Architecture showing UNet Generator, Spectral-Normalized PatchGAN Discriminator, VGG-16 Perceptual Loss, and Soft-Composite Post-Processor.*
+
+### 2.1 UNet Generator Component (54.4M Parameters)
 The Generator employs an **8-stage Encoder-Decoder architecture with Skip Connections**:
-- **Encoder**: 8 convolutional layers with stride 2 and LeakyReLU activation (\(\alpha=0.2\)). Downsamples spatial dimensions from \(256 \times 256\) down to \(1 \times 1\).
-- **Decoder**: 8 transposed convolutional layers upsampling back to \(256 \times 256\).
-- **Skip Connections**: Concatenates feature maps from encoder layer \(i\) directly into decoder layer \(N - i\) to prevent information loss during downsampling bottlenecking.
-- **Total Parameters**: **54,414,531** (~54.4M parameters).
+- **Encoder**: 8 convolutional downsampling stages (`e1`..`e7` + `bn`) with stride 2 and LeakyReLU activation ($\alpha=0.2$). Downsamples spatial dimensions from $256 \times 256$ down to $1 \times 1$.
+- **Bottleneck**: Captures global semantic context (facial geometry, eye spacing, nose bridge).
+- **Decoder**: 8 transposed convolutional upsampling stages (`d1`..`d7` + `out`) with skip connections concatenating encoder feature maps directly to corresponding decoder stages. Skip connections bypass the bottleneck, allowing fine spatial details (edges, skin texture, color boundaries) to transfer cleanly.
 
-### 3.2 Spectral-Normalized PatchGAN Discriminator
-The Discriminator evaluates local \(70 \times 70\) patches rather than the entire image:
-- Concatenates the condition image \(x\) and target/generated image \(y\) along the channel dimension (6 input channels).
-- **Spectral Normalization**: Wraps every convolutional layer with `torch.nn.utils.spectral_norm`. Spectral normalization bounds the matrix operator norm of convolutional weights:
-  \[
-  \sigma(W) = \max_{h: h \neq 0} \frac{\|Wh\|_2}{\|h\|_2} = 1
-  \]
-  This prevents exploding gradients in the discriminator and ensures smooth discriminator loss trajectories throughout 116 training epochs.
+### 2.2 Spectral-Normalized PatchGAN Discriminator Component
+The Discriminator evaluates local $70 \times 70$ patches:
+- Concatenates the condition image $I_m$ and target/generated image $\hat{I}$ along the channel dimension ($6$ channels).
+- **Spectral Normalization (`spectral_norm`)**: Wraps every convolutional layer with `torch.nn.utils.spectral_norm` to enforce Lipschitz continuity ($\sigma(W) \le 1$), stabilizing adversarial training.
 
-### 3.3 Loss Function Formulation
+### 2.3 Loss Function Formulation
 The generator is optimized using a weighted compound loss:
 
-\[
-\mathcal{L}_{\text{Generator}} = \mathcal{L}_{\text{BCE}}(D(x, G(x)), 1) + 100 \cdot \mathcal{L}_{L1}(G(x), y) + 10 \cdot \mathcal{L}_{\text{VGG16}}(G(x), y)
-\]
+$$\mathcal{L}_{\text{Generator}} = \mathcal{L}_{\text{adv}}(D(I_m, \hat{I}), 1) + 100 \cdot \| I - \hat{I} \|_1 + 10 \cdot \mathcal{L}_{\text{perc}}(\hat{I}, I)$$
 
-where \(\mathcal{L}_{\text{VGG16}}\) extracts feature representations from layer `features[16]` of a pre-trained VGG-16 network, enforcing high-level structural and contextual similarity.
-
-### 3.4 Soft Compositing & Feathering
-Raw GAN outputs often display subtle color shifts at mask boundaries. To remedy this, we implement a **Cosine Feather Mask**:
-\[
-\alpha(u, v) = \frac{1}{2} \left[1 + \cos\left(\pi \cdot \frac{d(u, v)}{r}\right)\right]
-\]
-The final composite output smoothly blends generated patch pixels with original surrounding pixels over a 15-pixel transition margin.
+where $\mathcal{L}_{\text{perc}}$ measures feature activation distances in layer `features[16]` of a pre-trained VGG-16 network.
 
 ---
 
-## 4. Experimental Setup & Training Details
+## 3. Four-Phase Progressive Training & Dynamics
 
-| Hyperparameter | Value |
-| :--- | :--- |
-| **Dataset** | CelebA Dataset (5,000 to 20,000 sub-sampled facial images) |
-| **Resolution** | \(256 \times 256 \times 3\) |
-| **Mask Type** | Center Mask (\(64 \times 64\)) & Random Rectangular Masking |
-| **Batch Size** | 8 to 16 |
-| **Learning Rate (G)** | \(1.5 \times 10^{-4}\) (refined down to \(1.0 \times 10^{-5}\)) |
-| **Learning Rate (D)** | \(3.0 \times 10^{-5}\) (refined down to \(5.0 \times 10^{-6}\)) |
-| **Optimizer** | Adam (\(\beta_1 = 0.5, \beta_2 = 0.999\)) |
-| **Total Epochs** | **116 Epochs** |
-| **Hardware** | NVIDIA CUDA-enabled GPU (Google Colab / Kaggle) |
+| Phase | Description | Epochs | Batch Size | LR (G) | LR (D) | Best Metric |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **P1 Baseline** | 50-epoch baseline (Adversarial + L1) | 50 | 16 | $2 \times 10^{-4}$ | $5 \times 10^{-5}$ | PSNR 24.11 dB, SSIM 0.993 |
+| **P2 Enhanced** | Checkpoint continuation + Perceptual Loss | ~30 | 8 | $5 \times 10^{-5}$ | $1 \times 10^{-5}$ | PSNR ~25.5 - 26.0 dB |
+| **P3 Refine** | Eye/Mouth fine detail refinement | ~30 | 8 | $5 \times 10^{-5}$ | $1 \times 10^{-5}$ | Sharper mask boundaries |
+| **P4 Final** | Final consolidation up to Epoch 116 | ~30 | 8 | $1 \times 10^{-5}$ | $5 \times 10^{-6}$ | **`PSNR 29.01 dB, SSIM 0.998`** |
+
+![Training Loss Curves and Metrics](assets/training_loss_curves.png)  
+*Figure 2: (a) Baseline 50-Epoch Training Dynamics showing Generator/Discriminator Loss and PSNR/SSIM growth; (b) Cross-phase PSNR progression.*
 
 ---
 
-## 5. Quantitative & Qualitative Results
+## 4. Quantitative & Qualitative Results
 
-### 5.1 Quantitative Performance Metrics
+### 4.1 Quantitative Comparison with Prior Methods
 
-| Epoch Milestone | Generator Loss (\(\mathcal{L}_G\)) | Discriminator Loss (\(\mathcal{L}_D\)) | Perceptual Loss | PSNR (dB) | SSIM |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Epoch 10** | 3.421 | 0.691 | 0.142 | 22.45 dB | 0.965 |
-| **Epoch 50** | 2.518 | 0.684 | 0.098 | 25.12 dB | 0.984 |
-| **Epoch 80** | 2.114 | 0.680 | 0.075 | 26.15 dB | 0.997 |
-| **Epoch 116 (Best)** | **2.012** | **0.679** | **0.069** | **`29.01 dB`** | **`0.998`** |
+| Method | Mask Type | Perceptual Loss | Domain | PSNR (approx.) |
+| :--- | :--- | :--- | :--- | :--- |
+| Context Encoders (Pathak et al., 2016) | Rectangular | No | General | ~20.0 dB |
+| Pix2Pix (Isola et al., 2017) | Rectangular | No | General | ~23.0 dB |
+| Partial Conv. (Liu et al., 2018) | Irregular | Yes | General | ~27.0 dB |
+| DeepFill (Yu et al., 2018) | Free-form | Yes | General | ~28.0 dB |
+| **Proposed (Phase-4 Final)** | **Rectangular** | **Yes** | **Face** | **`29.01 dB`** |
 
-### 5.2 Qualitative Image Showcase
+### 4.2 Qualitative Image Showcase
 
-![Inpainting Test Results](assets/inpainting_test_results.png)  
-*Figure 1: Qualitative evaluation showing Masked Input, Inpainted Output, and Ground Truth.*
+![Inpainting Test Results](assets/qualitative_reconstructions.png)  
+*Figure 3: Qualitative evaluation grid across test faces showing Masked Input (top), Inpainted Generator Output (middle), and Ground Truth target (bottom).*
 
 ![Soft Compositing Feathering](assets/soft_composite_feathering.png)  
-*Figure 2: Edge feathering comparison demonstrating smooth boundary transitions.*
-
-### 5.3 Key Findings
-1. **Perceptual Loss Impact**: Adding VGG-16 perceptual loss significantly reduced blurring in the reconstructed region, recovering sharp eye/nose details.
-2. **Spectral Normalization Impact**: Prevented discriminator dominance; discriminator loss stabilized near \(\ln(2) \approx 0.693\), proving healthy equilibrium in the GAN game.
-3. **Soft Composite Feathering**: Completely eliminated visible square border artifacts around the \(64 \times 64\) inpainting box.
+*Figure 4: Soft compositing cosine alpha feathering comparison showing seamless edge boundary transitions.*
 
 ---
 
-## 6. Conclusion & Future Work
+## 5. Conclusions & Future Work
 
-In this project, we successfully implemented, trained, and evaluated an enhanced cGAN image inpainting system. Reaching **29.01 dB PSNR** and **0.998 SSIM** across 116 epochs demonstrates that the combination of UNet skip-connections, Spectral Normalization, VGG-16 perceptual loss, and soft composite feathering yields state-of-the-art results for facial image restoration.
-
-**Future Directions**:
-- Extend mask generation to free-form continuous brush stroke masks using Partial Convolutions (PConvs).
-- Integrate Transformer-based attention blocks (such as SwinIR) into the bottleneck of the Generator for global context reasoning.
+In this project, a complete PyTorch cGAN inpainting framework was designed, implemented, and evaluated for face completion on the CelebA dataset. Multi-phase checkpoint continuation coupled with Spectral Normalization and VGG Perceptual Loss achieved a **+12.81 dB PSNR gain** over initial epoch 1 baseline, reaching a peak **29.01 dB PSNR** and **0.998 SSIM**.
 
 ---
 
 ## References
-1. Goodfellow, I., et al. (2014). *Generative Adversarial Nets*. Advances in Neural Information Processing Systems (NIPS).
-2. Mirza, M., & Osindero, S. (2014). *Conditional Generative Adversarial Nets*. arXiv preprint arXiv:1411.1784.
-3. Isola, P., Zhu, J. Y., Zhou, T., & Efros, A. A. (2016). *Image-to-Image Translation with Conditional Adversarial Networks*. IEEE CVPR.
-4. Simonyan, K., & Zisserman, A. (2014). *Very Deep Convolutional Networks for Large-Scale Image Recognition*. arXiv:1409.1556.
+1. Elharrouss, O., et al. (2020). *Image inpainting: A review*. Neural Processing Letters.
+2. Bertalmio, M., et al. (2000). *Image inpainting*. ACM SIGGRAPH.
+3. Goodfellow, I., et al. (2014). *Generative adversarial nets*. NIPS.
+4. Isola, P., et al. (2017). *Image-to-image translation with conditional adversarial networks*. CVPR.
+5. Liu, Z., et al. (2015). *Deep learning face attributes in the wild*. ICCV.
+6. Wang, Z., et al. (2004). *Image quality assessment: From error visibility to structural similarity*. IEEE TIP.
+7. Johnson, J., et al. (2016). *Perceptual losses for real-time style transfer and super-resolution*. ECCV.
+8. Mirza, M., & Osindero, S. (2014). *Conditional generative adversarial nets*. arXiv preprint.
+9. Liu, G., et al. (2018). *Image inpainting for irregular holes using partial convolutions*. ECCV.
+10. Pathak, D., et al. (2016). *Context encoders: Feature learning by inpainting*. CVPR.
+11. Ronneberger, O., et al. (2015). *U-net: Convolutional networks for biomedical image segmentation*. MICCAI.
+12. Yu, J., et al. (2019). *Free-form image inpainting with gated convolution*. ICCV.
+13. Yu, J., et al. (2018). *Generative image inpainting with contextual attention*. CVPR.
